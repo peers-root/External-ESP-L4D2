@@ -1,348 +1,176 @@
 #include <windows.h>
+#include <tlhelp32.h> // snapshot process memory
 #include <stdio.h>
 #include <string.h>
-#include <tlhelp32.h>
-#include <stdint.h>
-
 #include "math.h"
 
-uintptr_t engineBase = 0;
-uintptr_t clientBase = 0;
+DWORD engineBase; // target module
+DWORD serverBase; // target module
 
-int main()
-{
+int main(){
+
     HWND gameHandle = FindWindowA(NULL, "Left 4 Dead 2 - Direct3D 9");
-
-    if (gameHandle == NULL)
-    {
+    DWORD pid;
+    
+    GetWindowThreadProcessId(gameHandle, &pid);
+    
+    if (gameHandle == NULL){
         printf("Process not found!\n");
-        printf("Check if Left 4 Dead 2 is running.\n\n");
+        printf("Check if the process is running & try again.\n\n");
         Sleep(3000);
         return 1;
     }
-
-    DWORD pid = 0;
-
-    GetWindowThreadProcessId(gameHandle, &pid);
-
-    printf("Process ID found!\n");
-    printf("PID: %lu\n", pid);
-
-    HANDLE snapshot =
-        CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid);
-
-    if (snapshot == INVALID_HANDLE_VALUE)
-    {
-        printf("Snapshot failed! Error: %lu\n", GetLastError());
-        return 1;
+    
+    else{
+        printf("Process ID found!\n");
+        printf("PID: %d\n", pid); 
+        Sleep(3000); 
     }
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid); // "TH32CS_SNAPMODULE" OR "TH32CS_SNAPMODULE32" 32bit OR 64bit process
+
+    if (snapshot == INVALID_HANDLE_VALUE){
+            printf("Snapshot failed!");
+            return 1;
+        }
 
     MODULEENTRY32 m32;
-    memset(&m32, 0, sizeof(m32));
     m32.dwSize = sizeof(MODULEENTRY32);
-
-    if (Module32First(snapshot, &m32))
-    {
-        do
-        {
+    
+    if (Module32First(snapshot, &m32)) {
+        do{
             printf("\nModule Found! --> %s", m32.szModule);
-
-            if (_stricmp(m32.szModule, "engine.dll") == 0)
-            {
-                engineBase = (uintptr_t)m32.modBaseAddr;
-
-                printf(
-                    "\nengine.dll Found --> %p",
-                    m32.modBaseAddr
-                );
+            
+            if (strcmp(m32.szModule, "engine.dll") == 0){ 
+                engineBase = (DWORD)m32.modBaseAddr;
+                printf("\nTarget Module Found! --> %p", m32.modBaseAddr);
+            }
+            if (strcmp(m32.szModule, "server.dll") == 0){
+                serverBase = (DWORD)m32.modBaseAddr;
+                printf("\nTarget Module Found! --> %p", m32.modBaseAddr);
             }
 
-            if (_stricmp(m32.szModule, "client.dll") == 0)
-            {
-                clientBase = (uintptr_t)m32.modBaseAddr;
-
-                printf(
-                    "\nclient.dll Found --> %p",
-                    m32.modBaseAddr
-                );
-            }
-
-        } while (Module32Next(snapshot, &m32));
+        }while (Module32Next(snapshot, &m32));
     }
 
-    CloseHandle(snapshot);
+    CloseHandle(snapshot); // end ptr itteration once target .dll's are found.
 
-    if (engineBase == 0)
-    {
-        printf("\nengine.dll was not found!\n");
+    Sleep(3000); 
+
+    DWORD entityList = serverBase + 0x7E0774; // entityList Pointer = target.dll + 0x00
+    DWORD viewMatrix = engineBase + 0x601F9C; // viewMatrix Pointer = target2.dll + 0x00
+    DWORD teamOffset = serverBase + 0x238;
+    DWORD entityPtr;
+
+    int wteam;
+
+    HANDLE hprocess;
+
+    hprocess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    
+    if (hprocess == NULL) {
+        printf("\nFailed to open process!\n");
+        CloseHandle(snapshot); 
         return 1;
     }
 
-    if (clientBase == 0)
-    {
-        printf("\nclient.dll was not found!\n");
-        return 1;
-    }
+    HBRUSH hBrush = (HBRUSH)GetStockObject(NULL_BRUSH);
+    HPEN hPen = CreatePen(PS_SOLID, 4, RGB(0, 255, 1));
 
-    /*
-        Offsets from the list you posted.
-    */
-
-    uintptr_t entityList =
-        clientBase + 0x73A574;
-
-    uintptr_t viewMatrix =
-        engineBase + 0x4268EC;
-
-    printf("\n\nEntity list: %p\n", (void *)entityList);
-    printf("View matrix: %p\n", (void *)viewMatrix);
-
-    /*
-        Read-only access.
-    */
-
-    HANDLE hprocess =
-        OpenProcess(
-            PROCESS_VM_READ | PROCESS_QUERY_INFORMATION,
-            FALSE,
-            pid
-        );
-
-    if (hprocess == NULL)
-    {
-        printf(
-            "\nFailed to open process! Error: %lu\n",
-            GetLastError()
-        );
-
-        return 1;
-    }
-
-    HBRUSH hBrush =
-        (HBRUSH)GetStockObject(NULL_BRUSH);
-
-    HPEN hPen =
-        CreatePen(
-            PS_SOLID,
-            3,
-            RGB(0, 255, 1)
-        );
-
-    if (hPen == NULL)
-    {
-        printf("Failed to create drawing pen.\n");
+    if (hPen == NULL){
+        printf("Failed to draw ESP. . [HPEN ERROR]");
         CloseHandle(hprocess);
         return 1;
     }
-
-    while (TRUE)
-    {
+    
+    while (TRUE){
         HDC hdc = GetDC(gameHandle);
 
-        if (hdc == NULL)
-            break;
-
-        HPEN oldPen =
-            (HPEN)SelectObject(hdc, hPen);
-
-        HBRUSH oldBrush =
-            (HBRUSH)SelectObject(hdc, hBrush);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hPen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, hBrush);
 
         RECT rect;
+        GetClientRect(gameHandle, &rect);
 
-        memset(&rect, 0, sizeof(rect));
+        struct vector screenRes = { (float)(rect.right - rect.left), (float)(rect.bottom - rect.top), 0 }; // get screen res
+        struct matrix_4x4 viewMatrixData; 
+        
+        // Read view matrix once per frame
+        ReadProcessMemory(hprocess, (LPCVOID)viewMatrix, &viewMatrixData, sizeof(viewMatrixData), NULL);
 
-        GetClientRect(
-            gameHandle,
-            &rect
-        );
+        for (int i = 0; i < 65; i++) { // Entity Itteration loop
 
-        struct vector screenRes =
-        {
-            (float)(rect.right - rect.left),
-            (float)(rect.bottom - rect.top),
-            0.0f
-        };
+            DWORD entityPtr;
 
-        struct matrix_4x4 viewMatrixData;
-
-        memset(
-            &viewMatrixData,
-            0,
-            sizeof(viewMatrixData)
-        );
-
-        SIZE_T bytesRead = 0;
-
-        /*
-            Read view matrix.
-        */
-
-        if (!ReadProcessMemory(
-                hprocess,
-                (LPCVOID)viewMatrix,
-                &viewMatrixData,
-                sizeof(viewMatrixData),
-                &bytesRead))
-        {
-            SelectObject(hdc, oldPen);
-            SelectObject(hdc, oldBrush);
-
-            ReleaseDC(
-                gameHandle,
-                hdc
-            );
-
-            continue;
-        }
-
-        /*
-            Entity loop.
-        */
-
-        for (int i = 0; i < 65; i++)
-        {
-            uintptr_t entityPtr = 0;
-
-            uintptr_t entityAddress =
-                entityList + (i * 0x10);
-
-            /*
-                Read entity pointer.
-            */
-
-            if (!ReadProcessMemory(
-                    hprocess,
-                    (LPCVOID)entityAddress,
-                    &entityPtr,
-                    sizeof(entityPtr),
-                    NULL))
-            {
-                continue;
-            }
+            if (!ReadProcessMemory(hprocess, (LPCVOID)(entityList + (i * 0x10)), &entityPtr, sizeof(entityPtr), NULL)) continue;
 
             if (entityPtr < 0x10000)
                 continue;
 
-            /*
-                m_iTeamNum = 0xE4
-            */
+            if (!ReadProcessMemory(hprocess, (LPCVOID)(entityPtr + 0x238), &wteam, sizeof(int), NULL)) continue;
 
-            int team = 0;
+            if (wteam != 2 && wteam != 3) continue;
 
-            if (!ReadProcessMemory(
-                    hprocess,
-                    (LPCVOID)(entityPtr + 0xE4),
-                    &team,
-                    sizeof(team),
-                    NULL))
-            {
-                continue;
-            }
+            float x, y, z;
 
-            if (team != 2 && team != 3)
-                continue;
+            if (!ReadProcessMemory(hprocess, (LPCVOID)(entityPtr + 0x02CC), &x, sizeof(float), NULL)) continue;
+            if (!ReadProcessMemory(hprocess, (LPCVOID)(entityPtr + 0x02D0), &y, sizeof(float), NULL)) continue; 
+            if (!ReadProcessMemory(hprocess, (LPCVOID)(entityPtr + 0x02D4), &z, sizeof(float), NULL)) continue;  
 
-            /*
-                m_vecOrigin = 0x124
-            */
+            // Entity's feet/origin
+            struct vector entityPos = {
+                x,
+                y,
+                z
+            };
 
-            struct vector entityPos;
-
-            memset(
-                &entityPos,
-                0,
-                sizeof(entityPos)
-            );
-
-            if (!ReadProcessMemory(
-                    hprocess,
-                    (LPCVOID)(entityPtr + 0x124),
-                    &entityPos,
-                    sizeof(entityPos),
-                    NULL))
-            {
-                continue;
-            }
-
-            /*
-                Approximate head position.
-            */
-
-            struct vector entityTop =
-            {
-                entityPos.x,
-                entityPos.y,
-                entityPos.z + 72.0f
+            // Point above the entity
+            struct vector entityTop = {
+                x,
+                y,
+                z + 72.0f
             };
 
             struct vector screenFeet;
             struct vector screenTop;
 
-            memset(
+            // Project feet
+            if (!world_to_screen(
+                &entityPos,
+                &viewMatrixData,
                 &screenFeet,
-                0,
-                sizeof(screenFeet)
-            );
+                &screenRes
+            ))
+                continue;
 
-            memset(
+            // Project top
+            if (!world_to_screen(
+                &entityTop,
+                &viewMatrixData,
                 &screenTop,
-                0,
-                sizeof(screenTop)
-            );
-
-            if (!world_to_screen(
-                    &entityPos,
-                    &viewMatrixData,
-                    &screenFeet,
-                    &screenRes))
-            {
-                continue;
-            }
-
-            if (!world_to_screen(
-                    &entityTop,
-                    &viewMatrixData,
-                    &screenTop,
-                    &screenRes))
-            {
-                continue;
-            }
-
-            float height =
-                screenFeet.y - screenTop.y;
-
-            if (height <= 0.0f)
+                &screenRes
+            ))
                 continue;
 
-            float width =
-                height * 0.5f;
+            // Calculate box dimensions from projected points
+            float height = screenFeet.y - screenTop.y;
+            float width = height * 0.5f;
 
             Rectangle(
                 hdc,
-                (int)(screenTop.x - width / 2.0f),
+                (int)(screenTop.x - width / 2),
                 (int)screenTop.y,
-                (int)(screenTop.x + width / 2.0f),
+                (int)(screenTop.x + width / 2),
                 (int)screenFeet.y
             );
         }
 
-        SelectObject(
-            hdc,
-            oldPen
-        );
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
 
-        SelectObject(
-            hdc,
-            oldBrush
-        );
+        ReleaseDC(gameHandle, hdc);
 
-        ReleaseDC(
-            gameHandle,
-            hdc
-        );
-
-        Sleep(1);
+        Sleep(0);
     }
 
     DeleteObject(hPen);

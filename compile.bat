@@ -1,1 +1,1 @@
-gcc -o hacks.exe main.c -lgdi32 -lm
+gcc -o Sploit.exe Sploit.c -lgdi32 -lm
